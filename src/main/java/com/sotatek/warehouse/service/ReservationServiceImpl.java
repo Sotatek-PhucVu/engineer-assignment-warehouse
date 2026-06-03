@@ -7,6 +7,7 @@ import com.sotatek.warehouse.dto.response.ReservationResponse;
 import com.sotatek.warehouse.entity.Inventory;
 import com.sotatek.warehouse.entity.Reservation;
 import com.sotatek.warehouse.entity.ReservationItem;
+import com.sotatek.warehouse.exception.DuplicateException;
 import com.sotatek.warehouse.exception.InsufficientStockException;
 import com.sotatek.warehouse.exception.ResourceNotFoundException;
 import com.sotatek.warehouse.repository.InventoryRepository;
@@ -14,6 +15,7 @@ import com.sotatek.warehouse.repository.ReservationRepository;
 import com.sotatek.warehouse.service.factory.ReservationFactory;
 import com.sotatek.warehouse.service.state.ReservationStateFactory;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
@@ -36,6 +38,10 @@ public class ReservationServiceImpl implements ReservationService {
     @Transactional
     @Override
     public ReservationResponse reserve(CreateReservationRequest request) {
+        if (reservationRepository.findByOrderId(request.orderId()).isPresent()) {
+            throw new DuplicateException("Reservation already exists for orderId: " + request.orderId());
+        }
+
         List<String> skus = request.items().stream()
                 .map(ReservationItemRequest::sku)
                 .toList();
@@ -63,7 +69,12 @@ public class ReservationServiceImpl implements ReservationService {
         }
 
         Reservation reservation = reservationFactory.create(request);
-        reservationRepository.save(reservation);
+
+        try {
+            reservationRepository.save(reservation);
+        } catch (DataIntegrityViolationException e) {
+            throw new DuplicateException("Reservation already exists for orderId: " + request.orderId());
+        }
         return toResponse(reservation);
     }
 

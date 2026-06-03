@@ -3,6 +3,7 @@ package com.sotatek.warehouse.integration;
 import com.sotatek.warehouse.dto.request.CreateReservationRequest;
 import com.sotatek.warehouse.dto.request.ReservationItemRequest;
 import com.sotatek.warehouse.dto.response.ReservationResponse;
+import com.sotatek.warehouse.exception.DuplicateException;
 import com.sotatek.warehouse.exception.InsufficientStockException;
 import com.sotatek.warehouse.service.ReservationService;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,11 +28,8 @@ class ReservationConcurrencyIntegrationTest extends AbstractIntegrationTest {
 
     @BeforeEach
     void resetInventory() {
-        jdbcTemplate.update(
-                "DELETE FROM reservation_items WHERE reservation_id IN " +
-                "(SELECT id FROM reservations WHERE order_id LIKE 'ORD-CONCURRENT-%')"
-        );
-        jdbcTemplate.update("DELETE FROM reservations WHERE order_id LIKE 'ORD-CONCURRENT-%'");
+        jdbcTemplate.update("DELETE FROM reservation_items");
+        jdbcTemplate.update("DELETE FROM reservations");
         jdbcTemplate.update(
                 "UPDATE inventory SET available_stock = 100, reserved_stock = 0, version = 0 WHERE sku = 'A100'"
         );
@@ -78,5 +76,56 @@ class ReservationConcurrencyIntegrationTest extends AbstractIntegrationTest {
                 "SELECT available_stock FROM inventory WHERE sku = 'A100'", Integer.class
         );
         assertThat(available).isEqualTo(40);
+    }
+
+    @Test
+    void concurrentReservations_sameOrderId_onlyOneSucceeds_andStockDeductedOnce()
+            throws InterruptedException {
+
+        // Many concurrent requests with the SAME orderId: the unique constraint guarantees
+        // exactly one reservation is created; the rest are rejected as DUPLICATE_ORDER and
+        // stock is deducted only once.
+        int numThreads = 5;
+        String orderId = "ORD-IDEM-1";
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(numThreads);
+
+        List<ReservationResponse> successes = new CopyOnWriteArrayList<>();
+        List<Exception> failures = new CopyOnWriteArrayList<>();
+
+        for (int i = 0; i < numThreads; i++) {
+            new Thread(() -> {
+                try {
+                    startLatch.await();
+                    successes.add(reservationService.reserve(
+                            new CreateReservationRequest(orderId, List.of(new ReservationItemRequest("A100", 10)))
+                    ));
+                } catch (Exception e) {
+                    failures.add(e);
+                } finally {
+                    doneLatch.countDown();
+                }
+            }).start();
+        }
+
+        startLatch.countDown();
+        assertThat(doneLatch.await(15, TimeUnit.SECONDS)).isTrue();
+
+        // Exactly one succeeds; the rest are rejected as duplicate orders
+        assertThat(successes).hasSize(1);
+        assertThat(failures).hasSize(numThreads - 1);
+        assertThat(failures).allMatch(e -> e instanceof DuplicateException);
+
+        // Exactly one reservation row exists for that orderId
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM reservations WHERE order_id = ?", Integer.class, orderId
+        );
+        assertThat(count).isEqualTo(1);
+
+        // Stock deducted only once: 100 - 10 = 90
+        Integer available = jdbcTemplate.queryForObject(
+                "SELECT available_stock FROM inventory WHERE sku = 'A100'", Integer.class
+        );
+        assertThat(available).isEqualTo(90);
     }
 }

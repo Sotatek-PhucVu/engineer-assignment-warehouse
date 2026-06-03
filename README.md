@@ -84,7 +84,7 @@ PENDING  → cancel()  → CANCELLED  (terminal)
 | Column | Type | Constraints |
 |---|---|---|
 | id | BIGSERIAL | PRIMARY KEY |
-| order_id | VARCHAR(100) | NOT NULL |
+| order_id | VARCHAR(100) | NOT NULL, UNIQUE — idempotency key |
 | status | VARCHAR(20) | NOT NULL — PENDING / CONFIRMED / CANCELLED |
 | created_at | TIMESTAMP | NOT NULL |
 | version | BIGINT | NOT NULL, DEFAULT 0 — optimistic lock |
@@ -98,6 +98,8 @@ PENDING  → cancel()  → CANCELLED  (terminal)
 | quantity | INTEGER | NOT NULL, CHECK > 0 |
 
 **Concurrency safety:** The `reserve()` path issues a `SELECT … FOR UPDATE` (pessimistic write lock) on each `inventory` row. SKUs are locked in alphabetical order to prevent deadlocks when a reservation covers multiple SKUs. The `version` column on both `inventory` and `reservations` provides an optimistic locking safety net.
+
+**Duplicate-order protection:** `order_id` carries a `UNIQUE` constraint and is treated as an idempotency key. `reserve()` first checks whether the order already exists and rejects duplicates with `409 DUPLICATE` before touching any stock. The rare case where two identical `orderId` requests race past that pre-check is caught by the unique constraint — the loser's insert fails with `DataIntegrityViolationException`, its transaction (including the stock deduction) rolls back, and it is surfaced as the same `409 DUPLICATE`. A retried or duplicated submission can therefore never create a second reservation or double-deduct stock.
 
 **Migrations:** Liquibase SQL changesets only, in `src/main/resources/db/changelog/sql/`. Seed data (3 products + matching inventory rows) is applied in `005_seed_data.sql`.
 
@@ -146,13 +148,12 @@ Requires Docker (Testcontainers spins up a real PostgreSQL container).
 
 ### Unit tests (`service/ReservationServiceImplTest`)
 - No Spring context; repositories are mocked via Mockito
-- Covers: insufficient stock rejection, SKU not found, all valid and invalid state transitions, stock restoration on cancel
+- Covers: insufficient stock rejection, SKU not found, duplicate `orderId` rejection, all valid and invalid state transitions, stock restoration on cancel
 
-### Integration test (`integration/ReservationConcurrencyIntegrationTest`)
+### Integration tests (`integration/ReservationConcurrencyIntegrationTest`)
 - Full Spring Boot context + real PostgreSQL via Testcontainers
-- Sends two concurrent `reserve` requests for the same SKU where combined quantity (60 + 60 = 120) exceeds available stock (100)
-- Asserts exactly one succeeds and one is rejected with `InsufficientStockException`
-- Verifies final inventory state in the database
+- **Oversell:** two concurrent `reserve` requests for the same SKU where combined quantity (60 + 60 = 120) exceeds stock (100) → asserts exactly one succeeds, one is rejected with `InsufficientStockException`, and final stock is correct
+- **Duplicate order:** five concurrent `reserve` requests with the same `orderId` → asserts exactly one succeeds, the other four are rejected with `DuplicateException`, only one row is created, and stock is deducted only once
 
 ---
 

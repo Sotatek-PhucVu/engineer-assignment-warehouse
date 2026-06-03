@@ -7,6 +7,7 @@ import com.sotatek.warehouse.entity.Inventory;
 import com.sotatek.warehouse.entity.Reservation;
 import com.sotatek.warehouse.entity.ReservationItem;
 import com.sotatek.warehouse.entity.ReservationStatus;
+import com.sotatek.warehouse.exception.DuplicateException;
 import com.sotatek.warehouse.exception.InsufficientStockException;
 import com.sotatek.warehouse.exception.InvalidReservationStateException;
 import com.sotatek.warehouse.exception.ResourceNotFoundException;
@@ -28,6 +29,8 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -55,6 +58,7 @@ class ReservationServiceImplTest {
         Inventory inventory = buildInventory("A100", 100, 0);
         Reservation reservation = buildReservation(1L, ReservationStatus.PENDING);
 
+        when(reservationRepository.findByOrderId("ORD-001")).thenReturn(Optional.empty());
         when(inventoryRepository.findBySkuInForUpdate(List.of("A100"))).thenReturn(List.of(inventory));
         when(reservationFactory.create(any())).thenReturn(reservation);
         when(reservationRepository.save(any())).thenReturn(reservation);
@@ -69,8 +73,25 @@ class ReservationServiceImplTest {
     }
 
     @Test
+    void reserve_throwsDuplicateException_whenOrderIdAlreadyExists() {
+        Reservation existing = buildReservation(7L, ReservationStatus.PENDING);
+        when(reservationRepository.findByOrderId("ORD-DUP")).thenReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> service.reserve(
+                new CreateReservationRequest("ORD-DUP", List.of(new ReservationItemRequest("A100", 30)))
+        ))
+                .isInstanceOf(DuplicateException.class)
+                .hasMessageContaining("ORD-DUP");
+
+        // Duplicate is rejected before any stock lookup or deduction
+        verify(inventoryRepository, never()).findBySkuInForUpdate(any());
+        verify(reservationRepository, never()).save(any());
+    }
+
+    @Test
     void reserve_throws_InsufficientStockException_when_stock_too_low() {
         Inventory inventory = buildInventory("A100", 10, 0);
+        when(reservationRepository.findByOrderId("ORD-001")).thenReturn(Optional.empty());
         when(inventoryRepository.findBySkuInForUpdate(List.of("A100"))).thenReturn(List.of(inventory));
 
         assertThatThrownBy(() -> service.reserve(
@@ -84,6 +105,7 @@ class ReservationServiceImplTest {
 
     @Test
     void reserve_throws_ResourceNotFoundException_when_sku_not_found() {
+        when(reservationRepository.findByOrderId("ORD-001")).thenReturn(Optional.empty());
         when(inventoryRepository.findBySkuInForUpdate(List.of("UNKNOWN"))).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.reserve(
