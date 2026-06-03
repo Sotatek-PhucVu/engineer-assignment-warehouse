@@ -38,6 +38,10 @@ dependencies {
     // Liquibase
     implementation 'org.liquibase:liquibase-core'
 
+    // Retry for optimistic locking on confirm/cancel
+    implementation 'org.springframework.retry:spring-retry'
+    implementation 'org.springframework:spring-aspects'
+
     // Lombok
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'

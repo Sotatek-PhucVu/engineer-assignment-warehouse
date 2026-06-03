@@ -14,6 +14,8 @@ import com.sotatek.warehouse.repository.ReservationRepository;
 import com.sotatek.warehouse.service.factory.ReservationFactory;
 import com.sotatek.warehouse.service.state.ReservationStateFactory;
 import lombok.RequiredArgsConstructor;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -65,6 +67,7 @@ public class ReservationServiceImpl implements ReservationService {
         return toResponse(reservation);
     }
 
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class, maxAttempts = 3)
     @Transactional
     @Override
     public ReservationResponse confirm(Long id) {
@@ -74,6 +77,7 @@ public class ReservationServiceImpl implements ReservationService {
         return toResponse(reservation);
     }
 
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class, maxAttempts = 3)
     @Transactional
     @Override
     public ReservationResponse cancel(Long id) {
