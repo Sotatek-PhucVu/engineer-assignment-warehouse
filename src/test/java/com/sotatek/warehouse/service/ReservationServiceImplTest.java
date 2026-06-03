@@ -134,7 +134,7 @@ class ReservationServiceImplTest {
         Inventory inventory = buildInventory("A100", 70, 30);
 
         when(reservationRepository.findById(1L)).thenReturn(Optional.of(reservation));
-        when(inventoryRepository.findBySku("A100")).thenReturn(Optional.of(inventory));
+        when(inventoryRepository.findBySkuIn(List.of("A100"))).thenReturn(List.of(inventory));
         when(reservationRepository.save(any())).thenReturn(reservation);
 
         ReservationResponse response = service.cancel(1L);

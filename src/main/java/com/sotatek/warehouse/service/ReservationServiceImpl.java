@@ -38,8 +38,8 @@ public class ReservationServiceImpl implements ReservationService {
                 .map(ReservationItemRequest::sku)
                 .toList();
 
-        // Fetch and lock all inventory rows
-        // ORDER BY sku in the query ensures consistent lock ordering across concurrent
+        // Fetch and lock all rows in one query.
+        // ORDER BY sku ensures consistent lock ordering across concurrent transactions, preventing deadlocks.
         Map<String, Inventory> inventoryMap = inventoryRepository
                 .findBySkuInForUpdate(skus)
                 .stream()
@@ -80,9 +80,17 @@ public class ReservationServiceImpl implements ReservationService {
         Reservation reservation = findById(id);
         stateFactory.getState(reservation.getStatus()).cancel(reservation);
 
+        List<String> skus = reservation.getItems().stream()
+                .map(ReservationItem::getSku)
+                .toList();
+
+        Map<String, Inventory> inventoryMap = inventoryRepository
+                .findBySkuIn(skus)
+                .stream()
+                .collect(Collectors.toMap(Inventory::getSku, i -> i));
+
         for (ReservationItem item : reservation.getItems()) {
-            Inventory inventory = inventoryRepository
-                    .findBySku(item.getSku())
+            Inventory inventory = Optional.ofNullable(inventoryMap.get(item.getSku()))
                     .orElseThrow(() -> new ResourceNotFoundException("SKU not found: " + item.getSku()));
             inventory.setAvailableStock(inventory.getAvailableStock() + item.getQuantity());
             inventory.setReservedStock(inventory.getReservedStock() - item.getQuantity());

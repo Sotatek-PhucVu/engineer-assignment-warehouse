@@ -14,6 +14,8 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
 
     Optional<Inventory> findBySku(String sku);
 
+    List<Inventory> findBySkuIn(List<String> skus);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT i FROM Inventory i WHERE i.sku IN :skus ORDER BY i.sku")
     List<Inventory> findBySkuInForUpdate(@Param("skus") List<String> skus);
