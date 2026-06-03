@@ -74,4 +74,24 @@ class CreateReservationRequestValidationTest {
         assertThat(validator.validate(request))
                 .anyMatch(v -> v.getPropertyPath().toString().contains("orderId"));
     }
+
+    @Test
+    void duplicateSkus_isRejected() {
+        CreateReservationRequest request = new CreateReservationRequest(
+                "ORD-1", List.of(
+                        new ReservationItemRequest("A100", 5),
+                        new ReservationItemRequest("A100", 3)));
+        assertThat(validator.validate(request))
+                .anyMatch(v -> v.getPropertyPath().toString().contains("items")
+                        && v.getMessage().contains("duplicate SKUs"));
+    }
+
+    @Test
+    void distinctSkus_areAccepted() {
+        CreateReservationRequest request = new CreateReservationRequest(
+                "ORD-1", List.of(
+                        new ReservationItemRequest("A100", 5),
+                        new ReservationItemRequest("B200", 3)));
+        assertThat(validator.validate(request)).isEmpty();
+    }
 }
